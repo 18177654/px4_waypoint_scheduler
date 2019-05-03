@@ -12,8 +12,9 @@ from mavros_msgs.srv import *
 import time, sys, math
 
 # Global variables
-waypoints = [[0, 0, 0], [1, 0, 1], [-1, 0, 1], [2, 0, 1], [-2, 0, 1], [3, 0, 1], [-3, 0, 1], [2, 0, 1], [-2, 0, 1], [1, 0, 1], [-1, 0, 1], [10, 0, 1], [-10, 0, 1]]
-threshold = 0.25
+waypoints = [[0, 0, 0], [1, 0, 1], [-1, 0, 1], [2, 0, 1], [-2, 0, 1], [3, 0, 1], [-3, 0, 1], [2, 0, 1], [-2, 0, 1], [1, 0, 1], [-1, 0, 1], [1, 0, 1], [-1, 0, 1], [2, 0, 1], [-2, 0, 1], [3, 0, 1], [-3, 0, 1], [2, 0, 1], [-2, 0, 1], [1, 0, 1], [-1, 0, 1], [10, 0, 1], [0, 0, 0]]
+threshold = 0.1
+waypoint_time = 10
 
 # Flight modes class
 # Flight modes are activated using ROS services
@@ -181,14 +182,22 @@ def run(argv):
     # ROS main loop - first set value to zero before stepping
     print("Following waypoints...")
     current_wp = 0
+    last_time = -1
     while current_wp < len(waypoints) and not rospy.is_shutdown():
         y = waypoints[current_wp][0]
         x = waypoints[current_wp][1]
         z = waypoints[current_wp][2] + cnt.takeoffHeight
 
-        if abs(cnt.local_pos.x - x) < threshold and abs(cnt.local_vel.x) < threshold and abs(cnt.local_pos.y - y) < threshold and abs(cnt.local_vel.y) < threshold and abs(cnt.local_pos.z - z) < threshold and abs(cnt.local_vel.z) < threshold:
-            current_wp = current_wp + 1
-            print("Reached waypoint %d / %d" % (current_wp, len(waypoints)))
+        if waypoint_time < 0:
+            if abs(cnt.local_pos.x - x) < threshold and abs(cnt.local_vel.x) < threshold and abs(cnt.local_pos.y - y) < threshold and abs(cnt.local_vel.y) < threshold and abs(cnt.local_pos.z - z) < threshold and abs(cnt.local_vel.z) < threshold:
+                current_wp = current_wp + 1
+                print("Reached waypoint %d / %d" % (current_wp, len(waypoints)))
+        else:
+            current_time = time.time()
+            if current_time - last_time >= waypoint_time:
+                current_wp = current_wp + 1
+                print("Reached waypoint %d / %d" % (current_wp, len(waypoints)))
+                last_time = current_time
 
         # print("%f %f %f" % (abs(cnt.local_pos.x - x), abs(cnt.local_pos.y - y), abs(cnt.local_pos.z - z)))
         cnt.updateSp(waypoints[current_wp][0], waypoints[current_wp][1], -waypoints[current_wp][2] - cnt.takeoffHeight)
