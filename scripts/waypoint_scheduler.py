@@ -12,9 +12,44 @@ from mavros_msgs.srv import *
 import time, sys, math
 
 # Global variables
-waypoints = [[0, 0, 0], [1, 0, 1], [-1, 0, 1], [2, 0, 1], [-2, 0, 1], [3, 0, 1], [-3, 0, 1], [2, 0, 1], [-2, 0, 1], [1, 0, 1], [-1, 0, 1], [1, 0, 1], [-1, 0, 1], [2, 0, 1], [-2, 0, 1], [3, 0, 1], [-3, 0, 1], [2, 0, 1], [-2, 0, 1], [1, 0, 1], [-1, 0, 1], [10, 0, 1], [0, 0, 0]]
-threshold = 0.1
-waypoint_time = 10
+# Waypoints = [N, E, D, Yaw (deg)]
+waypoints = [
+            #  [0, 0, 0, 0],
+            #  [1, 0, 1, 0],
+            #  [-1, 0, 1, 0],
+            #  [2, 0, 1, 0],
+            #  [-2, 0, 1, 0],
+            #  [3, 0, 1, 0],
+            #  [-3, 0, 1, 0],
+            #  [2, 0, 1, 0],
+            #  [-2, 0, 1, 0],
+            #  [1, 0, 1, 0],
+            #  [-1, 0, 1, 0],
+             [0, 0, 0, 0],
+             [0, 0, 2, 0],
+             [16, 0, 2, 0],
+             [16, 12, 2, 0],
+             [16, 0, 2, 0],
+             [8, 0, 2, 0],
+             [8, 8, 2, 0],
+             [8, 0, 2, 0],
+             [0, 0, 2, 0],
+
+             [0, 22, 2, 0],
+
+             [4, 26, 2, 0],
+             [8, 22, 2, 0],
+             [8, 18, 2, 0],
+             [12, 14, 2, 0],
+             [16, 18, 2, 0],
+
+             [16, 30, 2, 0],
+
+             [0, 30, 2, 0],
+             [0, 42, 2, 0],
+            ]
+threshold = 0.3 # How small the position error and velocity should be before sending the next waypoint
+waypoint_time = -1 # If < 0, will send next waypoint when current one is reached. If >= 0, will send next waypoint after the amount of time has passed
 
 # Flight modes class
 # Flight modes are activated using ROS services
@@ -38,26 +73,13 @@ class FlightModes:
         except rospy.ServiceException, e:
             print "service set_mode call failed: %s. Offboard Mode could not be set."%e
 
-# Flight parameters class
-# Flight parameters are activated using ROS services
-class FlightParams:
-    def __init__(self):
-        # pull all parameters
-        # rospy.wait_for_service('mavros/param/pull')
-        pulled = False
-        while not pulled:
-            try:
-                paramService = rospy.ServiceProxy('mavros/param/pull', mavros_msgs.srv.ParamPull)
-                parameters_recv = paramService(True)
-                pulled = parameters_recv.success
-            except rospy.ServiceException, e:
-                print "service param_pull call failed: %s. Could not retrieve parameter list."%e
-
-    def getTakeoffHeight(self):
-        return rospy.get_param('mavros/param/MIS_TAKEOFF_ALT')
-
-    def getHoverThrust(self):
-        return rospy.get_param('mavros/param/MPC_THR_HOVER')
+    def setLandMode(self):
+        rospy.wait_for_service('mavros/set_mode')
+        try:
+            flightModeService = rospy.ServiceProxy('mavros/set_mode', mavros_msgs.srv.SetMode)
+            flightModeService(custom_mode='AUTO.LAND')
+        except rospy.ServiceException, e:
+            print "service set_mode call failed: %s. Land Mode could not be set."%e
 
 # Offboard controller for sending setpoints
 class Controller:
@@ -74,28 +96,25 @@ class Controller:
         # Instantiate the position setpoint message
         self.pos_sp = PositionTarget()
         # set the flag to control height
-        self.pos_sp.type_mask = int('110111111000', 2)
+        self.pos_sp.type_mask = int('100111111000', 2)
         # LOCAL_NED
         self.pos_sp.coordinate_frame = 1
         # initial values for setpoints
         self.pos_sp.position.x = 0.0
         self.pos_sp.position.y = 0.0
         self.pos_sp.position.z = 0.0
-
-        # Obtain flight parameters
-        params = FlightParams()
-        self.takeoffHeight = params.getTakeoffHeight()
-        self.hoverThrust = params.getHoverThrust()
+        self.pos_sp.yaw = math.radians(90)
 
     # Update setpoint message
-    def updateSp(self, n_step, e_step, d_step):
+    def updateSp(self, n_step, e_step, d_step, yaw_step):
         # Set step value
         self.pos_sp.position.y = n_step
         self.pos_sp.position.x = e_step
         self.pos_sp.position.z = -d_step
+        self.pos_sp.yaw = math.radians(90 + yaw_step)
 
         # Set mask
-        self.pos_sp.type_mask = int('110111111000', 2) 
+        self.pos_sp.type_mask = int('100111111000', 2) 
 
     # Callbacks.
 
@@ -129,7 +148,7 @@ def run(argv):
     cnt = Controller()
 
     # ROS loop rate
-    rate = rospy.Rate(200.0)
+    rate = rospy.Rate(20.0)
 
     # Subscribe to drone state
     rospy.Subscriber('mavros/state', State, cnt.stateCb)
@@ -164,53 +183,43 @@ def run(argv):
         rate.sleep()
     print("OFFBOARD mode activated\n")
 
-    # Make sure the drone is armed
-    print("Arming")
-    while not (cnt.state.armed or rospy.is_shutdown()):
-        modes.setArm()
-        rate.sleep()
-    print("Armed\n")
-
-    # Takeoff
-    print("Taking off")
-    while not (abs(cnt.local_pos.z - cnt.takeoffHeight) < 0.2 or rospy.is_shutdown()):
-        cnt.updateSp(0, 0, -cnt.takeoffHeight)
-        sp_pos_pub.publish(cnt.pos_sp)
-        rate.sleep()
-    print("Reached takeoff height\n")
-
     # ROS main loop - first set value to zero before stepping
-    print("Following waypoints...")
     current_wp = 0
-    last_time = -1
+    last_time = time.time()
+    print("Following waypoints...")
+    print("Executing waypoint %d / %d" % (current_wp + 1, len(waypoints)))
     while current_wp < len(waypoints) and not rospy.is_shutdown():
         y = waypoints[current_wp][0]
         x = waypoints[current_wp][1]
-        z = waypoints[current_wp][2] + cnt.takeoffHeight
+        z = waypoints[current_wp][2]
+
+        cnt.updateSp(waypoints[current_wp][0], waypoints[current_wp][1], -waypoints[current_wp][2], -waypoints[current_wp][3])
+        publish_setpoint(cnt, sp_pos_pub)
+        rate.sleep()
 
         if waypoint_time < 0:
             if abs(cnt.local_pos.x - x) < threshold and abs(cnt.local_vel.x) < threshold and abs(cnt.local_pos.y - y) < threshold and abs(cnt.local_vel.y) < threshold and abs(cnt.local_pos.z - z) < threshold and abs(cnt.local_vel.z) < threshold:
                 current_wp = current_wp + 1
-                print("Reached waypoint %d / %d" % (current_wp, len(waypoints)))
+                print("Executing waypoint %d / %d" % (current_wp + 1, len(waypoints)))
         else:
             current_time = time.time()
             if current_time - last_time >= waypoint_time:
                 current_wp = current_wp + 1
-                print("Reached waypoint %d / %d" % (current_wp, len(waypoints)))
+                print("Executing waypoint %d / %d" % (current_wp + 1, len(waypoints)))
                 last_time = current_time
+    print("Last waypoint reached\n")
 
-        # print("%f %f %f" % (abs(cnt.local_pos.x - x), abs(cnt.local_pos.y - y), abs(cnt.local_pos.z - z)))
-        cnt.updateSp(waypoints[current_wp][0], waypoints[current_wp][1], -waypoints[current_wp][2] - cnt.takeoffHeight)
+    # wait before landing
+    print("Waiting for user to terminate (press Ctrl-C)...")
+    init_time = time.time()
+    current_time = time.time()
+    while not rospy.is_shutdown():
+        cnt.updateSp(waypoints[current_wp - 1][0], waypoints[current_wp - 1][1], -waypoints[current_wp - 1][2], -waypoints[current_wp - 1][3])
         publish_setpoint(cnt, sp_pos_pub)
         rate.sleep()
-    print("Last waypoint reached\n")
-    
-    # Land quadrotor
-    print("Activate LAND mode")
-    while not (cnt.state.mode == "AUTO.LAND" or rospy.is_shutdown()):
-        modes.setLandMode()
-        rate.sleep()
-    print("LAND mode activated\n")
+
+        current_time = time.time()
+    print("Done\n")
 
 def main(argv):
     try:
